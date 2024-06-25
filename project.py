@@ -46,7 +46,7 @@ class Block:
         self.prev_hash = prev_hash
         self.transactions = transactions
         self.hash = calculate_hash(
-            str(self.index) + self.prev_hash+str(self.transactions))
+            str(self.index) + str(self.prev_hash)+str(self.transactions))
         self.validator = validator
 
 
@@ -72,39 +72,32 @@ class CryptoNode:
 
     def __init__(self):
 
-        self.txs = []
-        self.last_block = Block(0,'0',[],None)
-        self._private_key = dsa.generate_private_key(key_size=2048)
+        self._txs = []
+        self._last_block = blockchain.get_latest_block()
+        self.__private_key = dsa.generate_private_key(key_size=2048)
 
         # Derive the public key from the private key
-        self. public_key = self._private_key.public_key()
-        self.public_key_pem = self.public_key.public_bytes(
+        self._public_key = self.__private_key.public_key()
+        self._public_key_pem = self._public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        self._private_key_pem = self._private_key.private_bytes(
+        self.__private_key_pem = self.__private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         )
-    # def get_pv_pem(self):
-    #     private_key_PEM = self._private_key.private_bytes(
-    #         encoding=serialization.Encoding.PEM,
-    #         format=serialization.PrivateFormat.PKCS8,
-    #         encryption_algorithm=serialization.NoEncryption()
-    #     )
-    #     return private_key_PEM
 
-    # def get_pk_pem(self):
-    #     public_key_PEM = self.public_key.public_bytes(
-    #         encoding=serialization.Encoding.PEM,
-    #         format=serialization.PublicFormat.SubjectPublicKeyInfo
-    #     )
-    #     return public_key_PEM
+    def __verify_node(self,node):
+        if self.is_valid_block(node.last_block):
+            # this node is honest
+            return True
+        return False
 
     def is_valid_block(self, block):
-        if block.hash == calculate_hash(str(block.index)+ block.prev_hash+ str(self.txs)):
+        lastBlock = self._last_block
+        if block.hash == calculate_hash(str(lastBlock.index+1)+ str(lastBlock.hash)+ str(self._txs)):
             validator = block.validator
             if verify_block(validator['pk'], block.hash, validator['sign']):
                 return True
@@ -120,13 +113,15 @@ class CryptoNode:
 
     def recieve_block(self, block):
         if self.is_valid_block(block):
-            self.latest_block = block
+            
+            self._last_block = block
+            self._txs = []
             return True
         return False
 
     def recieve_tx(self, tx):
         if self.verify_transaction(tx):
-            self.txs.append(tx)
+            self._txs.append(tx)
             return True
         return False
     
@@ -136,39 +131,40 @@ class AuthorityNode(CryptoNode):
 
     def __init__(self):
         super().__init__()
-        self.last_block = Block(0,'0',[],None)
-        self.txs = []
-        self._private_key = dsa.generate_private_key(key_size=2048)
+        self._last_block = blockchain.get_latest_block()
+        self._txs = []
+        self.__private_key = dsa.generate_private_key(key_size=2048)
 
         # Derive the public key from the private key
-        self. public_key = self._private_key.public_key()
-        self.public_key_pem = self.public_key.public_bytes(
+        self._public_key = self.__private_key.public_key()
+        self._public_key_pem = self._public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        self._private_key_pem = self._private_key.private_bytes(
+        self._private_key_pem = self.__private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         )
 
     def mine_block(self):
-        lastBlock = self.latest_block
-        if len(self.txs) == 0:
+        lastBlock = self._last_block
+        if len(self._txs) == 0:
             return
 
         # Create new block
-        hash_value = calculate_hash(str(lastBlock.index + 1)+lastBlock.prev_hash+ self.txs)
+        hash_value = calculate_hash(str(lastBlock.index + 1)+str(lastBlock.hash)+ str(self._txs))
         # sign block
-        sign = sign_block(self._private_key,hash_value)
-        new_block = Block(lastBlock.index + 1, lastBlock.hash, self.txs,
-            {'pk':self.public_key_pem,'sign':sign})
-        self.last_block = new_block
-        blockchain.add_block(self.txs,{'pk':self.public_key_pem,'sign':sign})
+        sign = sign_block(self.__private_key,hash_value)
+        # new_block = Block(lastBlock.index + 1, lastBlock.hash, self.txs,
+        #     {'pk':self.public_key_pem,'sign':sign})
+        blockchain.add_block(self._txs,{'pk':self._public_key_pem,'sign':sign})
+        self.last_block = blockchain.get_latest_block()
         self.broadcast_block()
-        for tx in self.txs:
+        for tx in self._txs:
             self.add_coins_toClient(tx['amount'],tx['receiver'],tx['sender'])
+        self.txs = []
         
     def add_coins_toClient(self,amount,recieverAddr, senderAddr ):
         sender = clients[senderAddr]
@@ -179,13 +175,13 @@ class AuthorityNode(CryptoNode):
 
     def broadcast_block(self):
         for addr in node_addrs:
-            if self.public_key_pem != addr:  
-                authorithy_nodes[addr].recieve_block(self.latest_block)
+            if self._public_key_pem != addr:  
+                authorithy_nodes[addr].recieve_block(self._last_block)
 
     def broadcast_tx(self):
         for addr in node_addrs:
-            if self.public_key_pem != addr:  
-                authorithy_nodes[addr].recieve_tx(self.txs[len(self.txs)-1])
+            if self._public_key_pem != addr:  
+                authorithy_nodes[addr].recieve_tx(self._txs[len(self._txs)-1])
 
 class Client:
     def __init__(self, node_address, balance):
@@ -209,18 +205,20 @@ clients={}
 
 for i in range(4):
     cn = AuthorityNode()
-    addr = cn.public_key_pem
+    addr = cn._public_key_pem
     node_addrs.append(addr)
     authorithy_nodes.setdefault(addr, cn)
 
-for i in range(2):
+for i in range(3):
     clients.setdefault(i,Client(i, 10))
 
 currentMiner = authorithy_nodes[node_addrs[0]]
 miner2 = authorithy_nodes[node_addrs[1]]
-clients[0].send_transaction(1,10,currentMiner)
+clients[0].send_transaction(1,6,currentMiner)
 currentMiner.broadcast_tx()
-# print(clients[0].balance)
+currentMiner.mine_block()
+print(clients[0].balance)
+print(clients[1].balance)
 print(currentMiner.txs)
 print(miner2.txs)
 # print(auth_nodes[2]['addr'])
